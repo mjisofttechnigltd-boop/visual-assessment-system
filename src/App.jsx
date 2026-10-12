@@ -1,305 +1,517 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Eye, 
-  History, 
-  Maximize2, 
-  User, 
   Activity, 
+  ArrowLeft, 
+  RotateCcw, 
   CheckCircle2, 
-  FileText 
+  AlertTriangle, 
+  FileSpreadsheet,
+  CreditCard,
+  Cloud,
+  Database,
+  ShieldCheck
 } from 'lucide-react';
 
-// Canvas Test Components
-import TumblingECanvas from './components/TumblingECanvas';
+import HomePage from './HomePage';
 import SnellenCanvas from './components/SnellenCanvas';
+import TumblingECanvas from './components/TumblingECanvas';
 import IshiharaCanvas from './components/IshiharaCanvas';
 import AmslerGridCanvas from './components/AmslerGridCanvas';
-
-// Dashboard & Calibration
-import CalibrationModal from './components/CalibrationModal';
-import TestHistoryDashboard from './components/TestHistoryDashboard';
+import AdminDashboard from './components/AdminDashboard';
+import { supabase } from './supabaseClient';
 
 export default function App() {
-  // Navigation & Workflow State
-  const [activeTab, setActiveTab] = useState('test'); // 'test' | 'history'
-  const [step, setStep] = useState('calibration'); // 'calibration' | 'patient_info' | 'active_test'
+  // Navigation State: 'home' | 'selection' | 'calibration' | 'test' | 'admin'
+  const [currentView, setCurrentView] = useState('home');
   
-  // Clinical / Calibration Setup State
-  const [pxPerMm, setPxPerMm] = useState(3.78); // Default ~96 DPI screen calibration
-  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
-  const [patientName, setPatientName] = useState('');
-  const [selectedEye, setSelectedEye] = useState('OU (Both Eyes)');
-  const [selectedTest, setSelectedTest] = useState('TUMBLING_E');
+  // Test Configuration State
+  const [selectedTest, setSelectedTest] = useState('snellen'); 
+  const [eyeSelection, setEyeSelection] = useState('OU (Both Eyes)');
+  
+  // Screen Physical Calibration State
+  const [cardWidthPx, setCardWidthPx] = useState(280); 
+  const [displayScale, setDisplayScale] = useState(1.0);
 
-  // Assessment History State (Persisted in localStorage)
-  const [historyRecords, setHistoryRecords] = useState(() => {
-    const saved = localStorage.getItem('opticheck_history');
-    if (saved) {
+  const [testResultsHistory, setTestResultsHistory] = useState([]);
+  const [latestTestSummary, setLatestTestSummary] = useState(null);
+  const [isLoadingCloud, setIsLoadingCloud] = useState(false);
+
+  // Fetch test history from Supabase on mount (with localStorage fallback)
+  useEffect(() => {
+    async function fetchRecords() {
+      setIsLoadingCloud(true);
       try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error('Error parsing stored test history:', e);
+        const { data, error } = await supabase
+          .from('assessments')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          // Map snake_case database columns to frontend record properties
+          const formatted = data.map(item => ({
+            id: item.id,
+            date: item.created_at,
+            testName: item.test_name,
+            eyeTested: item.eye_tested,
+            score: item.score,
+            severity: item.severity,
+            diagnosis: item.diagnosis,
+            details: item.details || {}
+          }));
+          setTestResultsHistory(formatted);
+        } else {
+          // Fallback to localStorage if table is empty
+          const local = localStorage.getItem('visual_assessment_history');
+          if (local) setTestResultsHistory(JSON.parse(local));
+        }
+      } catch (err) {
+        console.warn('Supabase fetch failed, falling back to localStorage:', err.message);
+        const savedHistory = localStorage.getItem('visual_assessment_history');
+        if (savedHistory) setTestResultsHistory(JSON.parse(savedHistory));
+      } finally {
+        setIsLoadingCloud(false);
       }
     }
-    // Default initial mock history if local storage is empty
-    return [
-      {
-        id: 'REC-101',
-        patientName: 'Jane Doe',
-        date: '2026-10-04',
-        testType: 'AMSLER_GRID',
-        eyeTested: 'OD (Right Eye)',
-        score: 'Distortion Detected',
-        severity: 'action_required',
-        details: {
-          gridResolution: '20x20',
-          distortedQuadrants: 'Central & Upper Right',
-          metamorphopsia: 'Present',
-          scotomaDetected: 'No'
-        }
-      },
-      {
-        id: 'REC-102',
-        patientName: 'John Smith',
-        date: '2026-10-02',
-        testType: 'SNELLEN',
-        eyeTested: 'OU (Both Eyes)',
-        score: '20/20',
-        severity: 'normal',
-        details: {
-          acuityLogMAR: '0.00',
-          smallestLineRead: 'Line 8 (20/20)',
-          totalErrors: 0,
-          testingDistance: '1000 mm'
-        }
+
+    fetchRecords();
+  }, []);
+
+  // Save result payload to Supabase Database
+  const handleTestComplete = async (resultPayload) => {
+    let diagnosis = resultPayload.diagnosis;
+    if (!diagnosis) {
+      if (resultPayload.severity === 'normal') {
+        diagnosis = 'Normal Vision Function - No Significant Deficit Identified';
+      } else if (resultPayload.severity === 'moderate') {
+        diagnosis = 'Mild Visual Anomaly / Borderline Screening Result';
+      } else {
+        diagnosis = 'Clinical Deficit Identified - Professional Evaluation Recommended';
       }
-    ];
-  });
+    }
 
-  // Sync assessment history to localStorage on change
-  useEffect(() => {
-    localStorage.setItem('opticheck_history', JSON.stringify(historyRecords));
-  }, [historyRecords]);
-
-  // Unified save handler passed into all test canvases
-  const handleSaveTestResult = (testResultData) => {
-    const newRecord = {
-      id: `REC-${Date.now().toString().slice(-4)}`,
-      patientName: patientName.trim() || 'Anonymous Patient',
-      date: new Date().toISOString().split('T')[0],
-      testType: selectedTest,
-      eyeTested: testResultData.eyeTested || selectedEye,
-      score: testResultData.score || 'N/A',
-      severity: testResultData.severity || 'normal',
-      details: testResultData.details || {}
+    const newRecordPayload = {
+      test_name: selectedTest.toUpperCase(),
+      eye_tested: eyeSelection,
+      score: resultPayload.score || 'Completed',
+      severity: resultPayload.severity || 'normal',
+      diagnosis: diagnosis,
+      details: resultPayload.details || {}
     };
 
-    setHistoryRecords((prev) => [newRecord, ...prev]);
-    setActiveTab('history'); // Automatically switch to dashboard upon test completion
-    setStep('patient_info'); // Reset workflow for the next test session
+    // Optimistic local state update
+    const tempEntry = {
+      id: Date.now(),
+      date: new Date().toISOString(),
+      testName: newRecordPayload.test_name,
+      eyeTested: newRecordPayload.eye_tested,
+      score: newRecordPayload.score,
+      severity: newRecordPayload.severity,
+      diagnosis: newRecordPayload.diagnosis,
+      details: newRecordPayload.details
+    };
+
+    const updatedHistory = [tempEntry, ...testResultsHistory];
+    setTestResultsHistory(updatedHistory);
+    setLatestTestSummary(tempEntry);
+
+    // Save backup to localStorage
+    localStorage.setItem('visual_assessment_history', JSON.stringify(updatedHistory));
+
+    try {
+      // Insert into Supabase cloud table
+      const { error } = await supabase
+        .from('assessments')
+        .insert([newRecordPayload]);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Failed to sync record to Supabase cloud:', err.message);
+    }
   };
 
-  // Helper renderer for active test canvas
-  const renderActiveTestCanvas = () => {
-    const commonProps = {
-      pxPerMm,
-      eyeSelection: selectedEye,
-      onTestComplete: handleSaveTestResult,
-      onCancel: () => setStep('patient_info')
-    };
+  const handleClearHistory = async () => {
+    if (window.confirm('Are you sure you want to clear all screening records?')) {
+      setTestResultsHistory([]);
+      setLatestTestSummary(null);
+      localStorage.removeItem('visual_assessment_history');
 
-    switch (selectedTest) {
-      case 'TUMBLING_E':
-        return <TumblingECanvas {...commonProps} />;
-      case 'SNELLEN':
-        return <SnellenCanvas {...commonProps} />;
-      case 'ISHIHARA':
-        return <IshiharaCanvas {...commonProps} />;
-      case 'AMSLER_GRID':
-        return <AmslerGridCanvas {...commonProps} />;
-      default:
-        return <TumblingECanvas {...commonProps} />;
+      try {
+        await supabase.from('assessments').delete().neq('id', 0); // Deletes all rows
+      } catch (err) {
+        console.error('Error clearing cloud database:', err.message);
+      }
     }
+  };
+
+  const exportToCSV = () => {
+    if (testResultsHistory.length === 0) return;
+    const headers = ['ID', 'Date', 'Test Name', 'Eye Tested', 'Score', 'Severity', 'Diagnosis', 'Details'];
+    const rows = testResultsHistory.map(r => [
+      r.id,
+      new Date(r.date).toLocaleString(),
+      r.testName,
+      r.eyeTested,
+      `"${r.score}"`,
+      r.severity,
+      `"${r.diagnosis}"`,
+      `"${JSON.stringify(r.details || {}).replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + 
+      [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `visual_assessment_records_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
-    <div className="min-vh-100 bg-light d-flex flex-column">
-      {/* Global Header / Navigation */}
-      <header className="navbar navbar-expand-md navbar-dark bg-dark sticky-top shadow-sm px-4">
-        <div className="container-fluid max-w-7xl">
-          <div className="navbar-brand d-flex align-items-center gap-2 fw-bold fs-4">
-            <Eye className="text-primary" size={28} />
-            <span>OptiCheck <span className="badge bg-primary fs-6 fw-normal">Vision Suite</span></span>
-          </div>
+    <div className="min-vh-100 bg-white d-flex flex-column">
+      {/* Navbar */}
+      <nav className="navbar navbar-expand-lg navbar-light bg-light border-bottom px-3 px-md-4 py-2">
+        <div className="container-fluid">
+          <a 
+            className="navbar-brand fw-bold d-flex align-items-center gap-2" 
+            onClick={() => { setLatestTestSummary(null); setCurrentView('home'); }}
+            style={{ cursor: 'pointer' }}
+          >
+            <div className="p-2 bg-primary text-white rounded shadow-xs">
+              <Eye size={20} />
+            </div>
+            <span>Visual Assessment <span className="text-primary">System</span></span>
+          </a>
 
           <div className="d-flex align-items-center gap-2">
-            <button
-              className={`btn btn-sm ${activeTab === 'test' ? 'btn-primary' : 'btn-outline-light'}`}
-              onClick={() => setActiveTab('test')}
+            {currentView !== 'home' && currentView !== 'admin' && (
+              <button 
+                type="button" 
+                className="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+                onClick={() => { setLatestTestSummary(null); setCurrentView('home'); }}
+              >
+                <ArrowLeft size={16} /> Home
+              </button>
+            )}
+
+            <button 
+              type="button" 
+              className="btn btn-dark btn-sm d-inline-flex align-items-center gap-1 font-monospace fw-bold"
+              onClick={() => setCurrentView('admin')}
             >
-              <Activity size={16} className="me-1" /> Vision Test
-            </button>
-            <button
-              className={`btn btn-sm ${activeTab === 'history' ? 'btn-primary' : 'btn-outline-light'}`}
-              onClick={() => setActiveTab('history')}
-            >
-              <History size={16} className="me-1" /> History Dashboard
-              {historyRecords.length > 0 && (
-                <span className="badge bg-white text-dark ms-2">{historyRecords.length}</span>
-              )}
+              <ShieldCheck size={16} /> Admin Portal
             </button>
           </div>
         </div>
-      </header>
+      </nav>
 
-      {/* Main Content Area */}
-      <main className="container-fluid max-w-7xl py-4 flex-grow-1">
-        {activeTab === 'history' ? (
-          /* Render History Dashboard */
-          <TestHistoryDashboard records={historyRecords} />
-        ) : (
-          /* Vision Assessment Workflow */
-          <div className="row justify-content-center">
-            <div className="col-12 col-lg-10">
-              
-              {/* Calibration Status Banner */}
-              <div className="card border-0 shadow-sm mb-4">
-                <div className="card-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-3 bg-white rounded">
-                  <div className="d-flex align-items-center gap-3">
-                    <div className="p-2 bg-primary-subtle text-primary rounded-circle">
-                      <Maximize2 size={22} />
-                    </div>
-                    <div>
-                      <h6 className="mb-0 fw-bold">Display Scale Calibration</h6>
-                      <small className="text-muted">
-                        Current Scale: <strong>{pxPerMm.toFixed(2)} px/mm</strong> {pxPerMm > 0 ? '(Calibrated)' : '(Uncalibrated)'}
-                      </small>
+      {/* Main Viewport */}
+      <main className="flex-grow-1">
+        {currentView === 'home' && (
+          <HomePage 
+            onStartAssessment={() => setCurrentView('selection')}
+            onViewHistory={() => setCurrentView('admin')}
+          />
+        )}
+
+        {currentView === 'admin' && (
+          <AdminDashboard onBackToHome={() => setCurrentView('home')} />
+        )}
+
+        {currentView === 'selection' && (
+          <div className="container py-5">
+            <div className="row justify-content-center">
+              <div className="col-12 col-lg-9">
+                <div className="card border-0 shadow-sm p-4 bg-light">
+                  <h3 className="fw-bold text-dark mb-1">Select Screening Module</h3>
+                  <p className="text-muted small mb-4">Choose target eye configuration and ophthalmic testing protocol.</p>
+
+                  <div className="mb-4">
+                    <label className="form-label fw-bold text-dark small">1. Eye Selection:</label>
+                    <div className="row g-2">
+                      {['OU (Both Eyes)', 'OD (Right Eye)', 'OS (Left Eye)'].map((eye) => (
+                        <div className="col-12 col-md-4" key={eye}>
+                          <div 
+                            className={`p-3 rounded border text-center transition-all ${
+                              eyeSelection === eye ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-dark'
+                            }`}
+                            onClick={() => setEyeSelection(eye)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <span className="fw-semibold small">{eye}</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                  <button
-                    className="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
-                    onClick={() => setShowCalibrationModal(true)}
-                  >
-                    Recalibrate Display
+
+                  <div className="mb-4">
+                    <label className="form-label fw-bold text-dark small">2. Clinical Test Module:</label>
+                    <div className="row g-3">
+                      {[
+                        { id: 'snellen', title: 'Snellen Visual Acuity', desc: 'Standardized letter chart for distance visual acuity evaluation.' },
+                        { id: 'tumbling', title: 'Tumbling E Chart', desc: 'Directional optotype assessment suitable for pediatric or illiterate screening.' },
+                        { id: 'ishihara', title: 'Ishihara Color Plates', desc: 'Procedural dot-matrix pseudo-isochromatic plates for red-green color deficiency.' },
+                        { id: 'amsler', title: 'Amsler Grid Macular Test', desc: 'High-contrast grid evaluation for metamorphopsia and central scotomas.' }
+                      ].map((mod) => (
+                        <div className="col-12 col-md-6" key={mod.id}>
+                          <div 
+                            className={`card h-100 border p-3 ${
+                              selectedTest === mod.id ? 'border-primary bg-primary-subtle shadow-sm' : 'bg-white'
+                            }`}
+                            onClick={() => setSelectedTest(mod.id)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <div className="d-flex justify-content-between align-items-start mb-1">
+                              <h6 className="fw-bold text-dark mb-0">{mod.title}</h6>
+                              {selectedTest === mod.id && <CheckCircle2 size={16} className="text-primary" />}
+                            </div>
+                            <p className="extra-small text-muted mb-0">{mod.desc}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="text-end">
+                    <button 
+                      type="button" 
+                      className="btn btn-primary px-4 py-2 fw-bold d-inline-flex align-items-center gap-2"
+                      onClick={() => setCurrentView('calibration')}
+                    >
+                      Proceed to Display Calibration →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {currentView === 'calibration' && (
+          <div className="container py-5">
+            <div className="row justify-content-center">
+              <div className="col-12 col-lg-8">
+                <div className="card border-0 shadow-sm p-4 bg-light">
+                  <div className="d-flex align-items-center gap-2 mb-2">
+                    <CreditCard className="text-primary" size={24} />
+                    <h4 className="fw-bold text-dark mb-0">Physical Display Calibration</h4>
+                  </div>
+                  <p className="text-muted small mb-4">
+                    Place a physical ID card or credit card against your screen. Adjust the slider until the on-screen box matches your physical card width.
+                  </p>
+
+                  <div className="d-flex justify-content-center my-4 p-4 bg-white rounded border overflow-hidden">
+                    <div 
+                      className="border border-2 border-primary rounded bg-primary-subtle d-flex flex-column align-items-center justify-content-center shadow-sm transition-all"
+                      style={{ width: `${cardWidthPx}px`, height: `${cardWidthPx * 0.63}px`, minWidth: '180px' }}
+                    >
+                      <CreditCard className="text-primary mb-1" size={28} />
+                      <span className="fw-bold text-dark extra-small">Align Physical Card Here</span>
+                      <span className="text-muted extra-small font-monospace">{Math.round(cardWidthPx)} px (~85.6 mm)</span>
+                    </div>
+                  </div>
+
+                  <div className="mb-4 max-w-md mx-auto">
+                    <label className="form-label small fw-bold text-dark d-flex justify-content-between">
+                      <span>Adjust Size Slider:</span>
+                      <span className="text-primary font-monospace">{Math.round(displayScale * 100)}% Scale</span>
+                    </label>
+                    <input 
+                      type="range" 
+                      className="form-range" 
+                      min="180" 
+                      max="400" 
+                      step="2"
+                      value={cardWidthPx}
+                      onChange={(e) => {
+                        const newWidth = parseFloat(e.target.value);
+                        setCardWidthPx(newWidth);
+                        setDisplayScale(newWidth / 280);
+                      }}
+                    />
+                  </div>
+
+                  <div className="d-flex justify-content-between align-items-center border-top pt-3">
+                    <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => setCurrentView('selection')}>
+                      ← Back to Selection
+                    </button>
+                    <button type="button" className="btn btn-primary px-4 py-2 fw-bold" onClick={() => setCurrentView('test')}>
+                      Confirm Calibration & Start Test
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {currentView === 'test' && (
+          <div className="container py-4">
+            <div className="d-flex flex-wrap justify-content-between align-items-center mb-3 bg-light p-3 rounded border">
+              <div>
+                <span className="badge bg-primary text-uppercase font-monospace me-2">{selectedTest} Module</span>
+                <span className="badge bg-secondary">{eyeSelection}</span>
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <span className="extra-small text-muted font-monospace">Scale: {Math.round(displayScale * 100)}%</span>
+                <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => { setLatestTestSummary(null); setCurrentView('selection'); }}>
+                  Exit Test
+                </button>
+              </div>
+            </div>
+
+            {!latestTestSummary ? (
+              <>
+                {selectedTest === 'snellen' && (
+                  <SnellenCanvas eyeSelection={eyeSelection} displayScale={displayScale} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                )}
+                {selectedTest === 'tumbling' && (
+                  <TumblingECanvas eyeSelection={eyeSelection} displayScale={displayScale} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                )}
+                {selectedTest === 'ishihara' && (
+                  <IshiharaCanvas eyeSelection={eyeSelection} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                )}
+                {selectedTest === 'amsler' && (
+                  <AmslerGridCanvas eyeSelection={eyeSelection} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                )}
+              </>
+            ) : (
+              <div className="card border-0 shadow-sm p-4 bg-light text-center max-w-2xl mx-auto">
+                <div className={`p-3 rounded-circle d-inline-flex mx-auto mb-3 ${
+                  latestTestSummary.severity === 'normal' ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning'
+                }`}>
+                  {latestTestSummary.severity === 'normal' ? <CheckCircle2 size={40} /> : <AlertTriangle size={40} />}
+                </div>
+
+                <h4 className="fw-bold text-dark mb-1">Assessment Complete</h4>
+                <p className="text-muted small mb-3">Module: {latestTestSummary.testName} ({latestTestSummary.eyeTested})</p>
+
+                <div className="bg-white p-3 rounded border mb-4 text-start">
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <span className="small text-muted fw-semibold">Clinical Score / Visual Result:</span>
+                    <span className="badge bg-primary fs-6 font-monospace">{latestTestSummary.score}</span>
+                  </div>
+                  <div className="mb-2">
+                    <span className="small text-muted fw-semibold d-block mb-1">Diagnosis / Clinical Classification:</span>
+                    <div className={`p-2 rounded fw-bold small ${
+                      latestTestSummary.severity === 'normal' ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning-emphasis'
+                    }`}>
+                      {latestTestSummary.diagnosis}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="d-flex justify-content-center gap-3">
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => setLatestTestSummary(null)}>
+                    Retake Test
+                  </button>
+                  <button type="button" className="btn btn-primary fw-bold" onClick={() => setCurrentView('history')}>
+                    View Cloud Records →
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+        )}
 
-              {/* Step Flow Navigation */}
-              {step !== 'active_test' && (
-                <div className="card border-0 shadow-sm mb-4">
-                  <div className="card-body p-4">
-                    <h5 className="fw-bold mb-3 d-flex align-items-center gap-2">
-                      <User className="text-primary" size={20} /> New Vision Assessment Setup
-                    </h5>
-                    
-                    <div className="row g-3">
-                      {/* Patient Name Input */}
-                      <div className="col-12 col-md-6">
-                        <label className="form-label fw-semibold small text-muted">Patient Name / Identifier</label>
-                        <input
-                          type="text"
-                          className="form-control"
-                          placeholder="e.g. John Doe or PAT-0042"
-                          value={patientName}
-                          onChange={(e) => setPatientName(e.target.value)}
-                        />
-                      </div>
+        {currentView === 'history' && (
+          <div className="container py-5">
+            <div className="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+              <div>
+                <h3 className="fw-bold text-dark mb-1">Cloud Screening Records</h3>
+                <p className="text-muted small mb-0">Persistent clinical evaluations synchronized with Supabase database.</p>
+              </div>
 
-                      {/* Eye Selection */}
-                      <div className="col-12 col-md-6">
-                        <label className="form-label fw-semibold small text-muted">Eye Under Test</label>
-                        <select
-                          className="form-select"
-                          value={selectedEye}
-                          onChange={(e) => setSelectedEye(e.target.value)}
-                        >
-                          <option value="OU (Both Eyes)">OU (Both Eyes)</option>
-                          <option value="OD (Right Eye)">OD (Right Eye)</option>
-                          <option value="OS (Left Eye)">OS (Left Eye)</option>
-                        </select>
-                      </div>
+              <div className="d-flex gap-2">
+                {testResultsHistory.length > 0 && (
+                  <>
+                    <button type="button" className="btn btn-outline-success btn-sm d-inline-flex align-items-center gap-1 fw-semibold" onClick={exportToCSV}>
+                      <FileSpreadsheet size={16} /> Export CSV
+                    </button>
+                    <button type="button" className="btn btn-outline-danger btn-sm d-inline-flex align-items-center gap-1" onClick={handleClearHistory}>
+                      Clear Records
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
 
-                      {/* Select Assessment Modality */}
-                      <div className="col-12">
-                        <label className="form-label fw-semibold small text-muted">Select Vision Modality</label>
-                        <div className="row g-2">
-                          {[
-                            { id: 'TUMBLING_E', label: 'Tumbling E Chart', desc: 'Optotype orientation test for visual acuity.' },
-                            { id: 'SNELLEN', label: 'Snellen Chart', desc: 'Standard letter-based visual acuity chart.' },
-                            { id: 'ISHIHARA', label: 'Ishihara Color', desc: 'Pseudoisochromatic plate red-green deficiency test.' },
-                            { id: 'AMSLER_GRID', label: 'Amsler Grid', desc: 'Macular & central visual field distortion grid.' }
-                          ].map((t) => (
-                            <div key={t.id} className="col-12 col-sm-6">
-                              <div
-                                className={`p-3 border rounded h-100 cursor-pointer transition-all ${
-                                  selectedTest === t.id ? 'border-primary bg-primary-subtle' : 'bg-white'
-                                }`}
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => setSelectedTest(t.id)}
-                              >
-                                <div className="d-flex align-items-center justify-content-between mb-1">
-                                  <span className="fw-bold text-dark">{t.label}</span>
-                                  {selectedTest === t.id && <CheckCircle2 size={18} className="text-primary" />}
-                                </div>
-                                <p className="small text-muted mb-0">{t.desc}</p>
-                              </div>
+            {isLoadingCloud ? (
+              <div className="text-center py-5">
+                <div className="spinner-border text-primary mb-2" role="status"></div>
+                <p className="text-muted small">Loading records from Supabase cloud...</p>
+              </div>
+            ) : testResultsHistory.length === 0 ? (
+              <div className="text-center py-5 bg-light rounded border">
+                <History size={48} className="text-muted mb-3" />
+                <h5 className="fw-bold text-dark">No Cloud Records Found</h5>
+                <p className="text-muted small mb-4">Complete a screening module to save records to the database.</p>
+                <button type="button" className="btn btn-primary fw-bold" onClick={() => setCurrentView('selection')}>
+                  Start Screening
+                </button>
+              </div>
+            ) : (
+              <div className="row g-3">
+                {testResultsHistory.map((record) => (
+                  <div className="col-12" key={record.id}>
+                    <div className="card border-0 shadow-sm p-3 bg-light">
+                      <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                        <div className="d-flex align-items-center gap-3">
+                          <div className={`p-2 rounded ${record.severity === 'normal' ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning'}`}>
+                            {record.severity === 'normal' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+                          </div>
+                          <div>
+                            <div className="d-flex align-items-center gap-2">
+                              <h6 className="fw-bold text-dark mb-0 font-monospace">{record.testName} Module</h6>
+                              <span className="badge bg-secondary">{record.eyeTested}</span>
                             </div>
-                          ))}
+                            <span className="text-muted extra-small">{new Date(record.date).toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-end">
+                          <span className="badge bg-white text-dark border shadow-xs px-3 py-2 fw-bold font-monospace fs-6">
+                            Score: {record.score}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Begin Assessment Action */}
-                      <div className="col-12 text-end mt-4">
-                        <button
-                          className="btn btn-primary px-4 py-2 d-inline-flex align-items-center gap-2 fw-semibold"
-                          onClick={() => setStep('active_test')}
-                        >
-                          <Activity size={18} /> Begin Assessment
-                        </button>
+                      <div className="bg-white p-2 rounded border mb-2">
+                        <span className="extra-small text-muted fw-bold d-block">Clinical Diagnosis / Classification:</span>
+                        <span className={`small fw-bold ${record.severity === 'normal' ? 'text-success' : 'text-danger'}`}>
+                          {record.diagnosis}
+                        </span>
                       </div>
+
+                      {record.details && (
+                        <div className="extra-small text-muted d-flex flex-wrap gap-3">
+                          {Object.entries(record.details).map(([key, val]) => (
+                            <span key={key}>
+                              <strong className="text-dark">{key}:</strong> {String(val)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              )}
-
-              {/* Active Assessment Canvas */}
-              {step === 'active_test' && (
-                <div className="card border-0 shadow-sm">
-                  <div className="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                    <div>
-                      <span className="badge bg-primary-subtle text-primary mb-1">Testing Active</span>
-                      <h5 className="mb-0 fw-bold">{patientName || 'Anonymous Patient'} &mdash; {selectedTest.replace('_', ' ')}</h5>
-                    </div>
-                    <button
-                      className="btn btn-outline-danger btn-sm"
-                      onClick={() => setStep('patient_info')}
-                    >
-                      Exit Test
-                    </button>
-                  </div>
-                  <div className="card-body p-4">
-                    {renderActiveTestCanvas()}
-                  </div>
-                </div>
-              )}
-
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>
 
-      {/* Screen Calibration Modal */}
-      {showCalibrationModal && (
-        <CalibrationModal
-          pxPerMm={pxPerMm}
-          onSave={(newPxPerMm) => {
-            setPxPerMm(newPxPerMm);
-            setShowCalibrationModal(false);
-          }}
-          onClose={() => setShowCalibrationModal(false)}
-        />
-      )}
+      <footer className="bg-light border-top py-3 text-center text-muted small mt-auto">
+        <div className="container">
+          Visual Assessment System &copy; 2026 | Cloud-Integrated Clinical Screening Suite
+        </div>
+      </footer>
     </div>
   );
 }

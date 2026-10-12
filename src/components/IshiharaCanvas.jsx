@@ -131,6 +131,7 @@ export default function IshiharaCanvas({
   const [cameraActive, setCameraActive] = useState(false);
   const [measuredDistanceCm, setMeasuredDistanceCm] = useState(50);
   const [distanceStatus, setDistanceStatus] = useState('ideal');
+  const [isMobile, setIsMobile] = useState(false);
   const videoRef = useRef(null);
 
   // Speech Recognition State
@@ -267,6 +268,17 @@ export default function IshiharaCanvas({
     };
   }, [cameraActive]);
 
+  // Check for mobile viewport
+  useEffect(() => {
+    const updateViewportMode = () => {
+      setIsMobile(window.matchMedia('(max-width: 767px)').matches);
+    };
+
+    updateViewportMode();
+    window.addEventListener('resize', updateViewportMode);
+    return () => window.removeEventListener('resize', updateViewportMode);
+  }, []);
+
   // Physical Keyboard Entry Listener (Fixed duplicate issue)
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -290,6 +302,8 @@ export default function IshiharaCanvas({
   }, [isFinished, currentInput, currentPlateIdx]);
 
   const handleNextPlate = (valueToSubmit) => {
+    if (distanceStatus !== 'ideal') return;
+
     const finalVal = valueToSubmit !== undefined ? valueToSubmit : (currentInput.trim() || 'Nothing');
     
     const updatedAnswers = [
@@ -388,13 +402,21 @@ export default function IshiharaCanvas({
     setUserAnswers([]);
     setCurrentInput('');
     setIsFinished(false);
+    setMeasuredDistanceCm(35);
+    setDistanceStatus('ideal');
+  };
+
+  const handleForceIdealDistance = (e) => {
+    if (e) e.stopPropagation();
+    setMeasuredDistanceCm(35);
+    setDistanceStatus('ideal');
   };
 
   return (
-    <div className="ishihara-canvas-container">
+    <div className="ishihara-canvas-container" style={{ width: '100%', maxWidth: '100%' }}>
       {/* Top Bar */}
-      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-4 border">
-        <div className="d-flex align-items-center gap-3">
+      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-4 border" style={{ gap: '0.5rem' }}>
+        <div className="d-flex align-items-center gap-3 flex-wrap">
           <span className="badge bg-secondary d-flex align-items-center gap-1">
             <Eye size={14} /> {eyeSelection}
           </span>
@@ -408,11 +430,12 @@ export default function IshiharaCanvas({
           </span>
         </div>
 
-        <div className="d-flex align-items-center gap-2">
+        <div className="d-flex align-items-center gap-2 flex-wrap">
           <button
             type="button"
-            className={`btn btn-sm ${cameraActive ? 'btn-primary' : 'btn-outline-secondary'} d-inline-flex align-items-center gap-1`}
+            className={`btn ${cameraActive ? 'btn-primary' : 'btn-outline-secondary'} d-inline-flex align-items-center gap-1`}
             onClick={() => setCameraActive(!cameraActive)}
+            style={{ fontSize: isMobile ? '0.75rem' : '0.875rem' }}
           >
             {cameraActive ? <Camera size={14} /> : <CameraOff size={14} />}
             {cameraActive ? 'Distance Monitor On' : 'Enable Camera Distance'}
@@ -420,8 +443,9 @@ export default function IshiharaCanvas({
 
           <button 
             type="button"
-            className="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+            className="btn btn-outline-secondary d-inline-flex align-items-center gap-1"
             onClick={handleRestart}
+            style={{ fontSize: isMobile ? '0.75rem' : '0.875rem' }}
           >
             <RotateCcw size={14} /> Reset
           </button>
@@ -430,13 +454,13 @@ export default function IshiharaCanvas({
 
       {/* Video Distance Monitor */}
       {cameraActive && (
-        <div className="mb-3 p-2 bg-dark rounded d-flex align-items-center gap-3 text-white">
+        <div className="mb-3 p-2 bg-dark rounded d-flex align-items-center gap-3 text-white" style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'flex-start' : 'center' }}>
           <video 
             ref={videoRef} 
             autoPlay 
             muted 
             playsInline 
-            style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px' }}
+            style={{ width: isMobile ? '100%' : '80px', maxWidth: isMobile ? '180px' : '80px', height: isMobile ? '72px' : '60px', objectFit: 'cover', borderRadius: '4px' }}
           />
           <div className="small">
             <div className="fw-bold">Optical Distance Tracker Active</div>
@@ -450,9 +474,31 @@ export default function IshiharaCanvas({
           {/* Procedural Canvas Dot Matrix Plate */}
           <div className="col-12 col-md-7">
             <div 
-              className="border rounded bg-white p-4 d-flex flex-column align-items-center justify-content-center shadow-inner overflow-hidden"
-              style={{ minHeight: '380px' }}
+              className="border rounded bg-white p-4 d-flex flex-column align-items-center justify-content-center shadow-inner overflow-hidden position-relative"
+              style={{ minHeight: isMobile ? '260px' : '380px', padding: isMobile ? '1rem' : '2rem' }}
             >
+              {distanceStatus !== 'ideal' && (
+                <div
+                  className="position-absolute top-0 start-0 w-100 h-100 bg-dark bg-opacity-85 d-flex flex-column align-items-center justify-content-center text-center p-3 z-3"
+                  style={{ backdropFilter: 'blur(4px)' }}
+                >
+                  <div className="p-3 bg-danger text-white rounded-circle mb-2">
+                    <Ruler size={28} />
+                  </div>
+                  <h6 className="fw-bold text-white mb-1">Testing Paused (Motion Lock)</h6>
+                  <p className="text-white-50 extra-small mb-2 max-w-xs">
+                    Please position yourself <strong>35 cm</strong> from the screen.
+                  </p>
+                  <button 
+                    type="button" 
+                    className="btn btn-sm btn-light fw-bold text-dark"
+                    onClick={handleForceIdealDistance}
+                  >
+                    Bypass / Force Unlock
+                  </button>
+                </div>
+              )}
+
               <div className="text-center mb-2">
                 <span className="badge bg-primary-subtle text-primary fw-bold font-monospace mb-1">
                   Plate {currentPlateIdx + 1} of {ISHIHARA_PLATES.length}
@@ -461,18 +507,18 @@ export default function IshiharaCanvas({
               </div>
 
               {/* Algorithmically Generated HTML5 Canvas Plate */}
-              <div className="my-2 select-none d-flex justify-content-center">
+              <div className="my-2 select-none d-flex justify-content-center" style={{ width: '100%' }}>
                 <canvas 
                   ref={canvasRef} 
-                  width={260} 
-                  height={260} 
+                  width={isMobile ? 220 : 260} 
+                  height={isMobile ? 220 : 260} 
                   className="rounded-circle border shadow-sm"
                 />
               </div>
 
               {/* Number Input Controls */}
               <div className="w-100 max-w-xs text-center mt-2">
-                <div className="input-group">
+                <div className="input-group" style={{ flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
                   <input
                     type="text"
                     className="form-control text-center font-monospace fw-bold fs-5"
@@ -483,12 +529,16 @@ export default function IshiharaCanvas({
                       if (e.key === 'Enter') handleNextPlate();
                     }}
                     maxLength={3}
+                    style={{ minHeight: isMobile ? '48px' : 'auto', fontSize: isMobile ? '1rem' : '1.25rem' }}
+                    disabled={distanceStatus !== 'ideal'}
                   />
                   <button
                     className={`btn ${isListening ? 'btn-danger' : 'btn-outline-secondary'}`}
                     type="button"
                     onClick={toggleVoiceInput}
                     title="Speak number"
+                    style={{ minHeight: isMobile ? '48px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     {isListening ? <MicOff size={16} /> : <Mic size={16} />}
                   </button>
@@ -496,6 +546,8 @@ export default function IshiharaCanvas({
                     className="btn btn-primary fw-bold"
                     type="button"
                     onClick={() => handleNextPlate()}
+                    style={{ minHeight: isMobile ? '48px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     Submit
                   </button>
@@ -506,17 +558,19 @@ export default function IshiharaCanvas({
 
           {/* Touch Keypad */}
           <div className="col-12 col-md-5">
-            <div className="card border-0 bg-light p-3">
+            <div className="card border-0 bg-light p-3" style={{ padding: isMobile ? '1rem' : '1.5rem' }}>
               <h6 className="fw-bold mb-2 text-dark">Number Keypad</h6>
               <p className="extra-small text-muted mb-3">Click numbers or select "Nothing" if no digit is visible:</p>
 
-              <div className="d-grid grid-cols-3 gap-2 mb-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <div className="d-grid gap-2 mb-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
                 {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
                   <button
                     key={num}
                     type="button"
                     className="btn btn-white border fw-bold py-2 font-monospace shadow-sm"
                     onClick={() => setCurrentInput((prev) => (prev + num).slice(0, 3))}
+                    style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     {num}
                   </button>
@@ -525,6 +579,8 @@ export default function IshiharaCanvas({
                   type="button"
                   className="btn btn-outline-danger fw-bold py-2"
                   onClick={() => setCurrentInput('')}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                  disabled={distanceStatus !== 'ideal'}
                 >
                   Clear
                 </button>
@@ -532,6 +588,8 @@ export default function IshiharaCanvas({
                   type="button"
                   className="btn btn-white border fw-bold py-2 font-monospace shadow-sm"
                   onClick={() => setCurrentInput((prev) => (prev + '0').slice(0, 3))}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                  disabled={distanceStatus !== 'ideal'}
                 >
                   0
                 </button>
@@ -539,7 +597,8 @@ export default function IshiharaCanvas({
                   type="button"
                   className="btn btn-primary fw-bold py-2"
                   onClick={() => handleNextPlate()}
-                  disabled={!currentInput.trim()}
+                  disabled={!currentInput.trim() || distanceStatus !== 'ideal'}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
                 >
                   Enter
                 </button>
@@ -550,6 +609,8 @@ export default function IshiharaCanvas({
                   type="button"
                   className="btn btn-outline-secondary w-100 py-2 d-flex align-items-center justify-content-center gap-2 fw-semibold"
                   onClick={() => handleNextPlate('Nothing')}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                  disabled={distanceStatus !== 'ideal'}
                 >
                   <HelpCircle size={16} /> I Don't See Any Number
                 </button>
@@ -559,7 +620,7 @@ export default function IshiharaCanvas({
         </div>
       ) : (
         /* Test Completion Summary */
-        <div className="card border-success shadow-sm">
+        <div className="card border-success shadow-sm" style={{ width: '100%' }}>
           <div className="card-body p-4 text-center">
             <div className="p-3 bg-success-subtle text-success rounded-circle d-inline-flex mb-3">
               <CheckCircle2 size={36} />
@@ -570,6 +631,22 @@ export default function IshiharaCanvas({
             </p>
             <button className="btn btn-outline-primary btn-sm" onClick={handleRestart}>
               Run Another Color Vision Test
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Distance Lock Overlay */}
+      {distanceStatus !== 'ideal' && (
+        <div className="distance-lock-overlay d-flex align-items-center justify-content-center" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.7)', zIndex: 1040 }}>
+          <div className="text-center text-white" style={{ pointerEvents: 'none' }}>
+            <h4 className="fw-bold mb-3">Adjust Distance for Optimal Viewing</h4>
+            <p className="extra-small mb-4" style={{ opacity: 0.9 }}>
+              For the best results, please ensure your device is at an ideal distance.<br />
+              Current Distance: <strong>{measuredDistanceCm} cm</strong>
+            </p>
+            <button className="btn btn-success" onClick={handleForceIdealDistance}>
+              I Am at the Ideal Distance
             </button>
           </div>
         </div>

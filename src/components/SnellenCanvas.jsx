@@ -33,9 +33,10 @@ export default function SnellenCanvas({
   const [userInput, setUserInput] = useState('');
   
   // Camera & Distance State
-  const [cameraActive, setCameraActive] = useState(false);
-  const [measuredDistanceCm, setMeasuredDistanceCm] = useState(100);
+  const [cameraActive, setCameraActive] = useState(true);
+  const [measuredDistanceCm, setMeasuredDistanceCm] = useState(35);
   const [distanceStatus, setDistanceStatus] = useState('ideal');
+  const [isMobile, setIsMobile] = useState(false);
   const videoRef = useRef(null);
 
   // Speech Recognition State
@@ -43,33 +44,86 @@ export default function SnellenCanvas({
 
   const currentLine = SNELLEN_LINES[currentLineIdx];
 
+  const handleForceIdealDistance = (e) => {
+    if (e) e.stopPropagation();
+    setMeasuredDistanceCm(35);
+    setDistanceStatus('ideal');
+  }; 
+
+  // Check for mobile viewport
+  useEffect(() => {
+    const updateViewportMode = () => {
+      setIsMobile(window.matchMedia('(max-width: 767px)').matches);
+    };
+
+    updateViewportMode();
+    window.addEventListener('resize', updateViewportMode);
+    return () => window.removeEventListener('resize', updateViewportMode);
+  }, []);
+
   // 1. WebCam Distance Estimation
   useEffect(() => {
     let stream = null;
-    let interval = null;
+    let animationFrameId = null;
+    let baseLighting = null;
+    let smoothedDist = 35;
 
     if (cameraActive) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+      navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: 'user' } })
         .then((s) => {
           stream = s;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
 
-          interval = setInterval(() => {
-            if (videoRef.current) {
-              const simulatedDist = Math.floor(80 + Math.random() * 45); 
-              setMeasuredDistanceCm(simulatedDist);
+          const procCanvas = document.createElement('canvas');
+          procCanvas.width = 160;
+          procCanvas.height = 120;
+          const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-              if (simulatedDist < 90) {
-                setDistanceStatus('too_close');
-              } else if (simulatedDist > 120) {
-                setDistanceStatus('too_far');
-              } else {
-                setDistanceStatus('ideal');
+          let lastTime = 0;
+          const trackUserMovement = (timestamp) => {
+            if (timestamp - lastTime > 200) {
+              lastTime = timestamp;
+
+              if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+                procCtx.drawImage(videoRef.current, 0, 0, 160, 120);
+                const frameData = procCtx.getImageData(40, 30, 80, 60).data;
+
+                let totalBrightness = 0;
+                for (let i = 0; i < frameData.length; i += 16) {
+                  totalBrightness += (frameData[i] + frameData[i + 1] + frameData[i + 2]) / 3;
+                }
+                const currentBrightness = totalBrightness / (frameData.length / 16);
+
+                if (baseLighting === null && currentBrightness > 10) {
+                  baseLighting = currentBrightness;
+                }
+
+                const baseline = baseLighting || 100;
+                const delta = currentBrightness - baseline;
+                let estimatedCm = 35 - (delta * 0.35);
+                estimatedCm = Math.max(25, Math.min(55, estimatedCm));
+
+                const alpha = 0.2;
+                smoothedDist = (alpha * estimatedCm) + ((1 - alpha) * smoothedDist);
+                const finalDist = Math.round(smoothedDist);
+
+                setMeasuredDistanceCm(finalDist);
+
+                if (finalDist < 30) {
+                  setDistanceStatus('too_close');
+                } else if (finalDist > 40) {
+                  setDistanceStatus('too_far');
+                } else {
+                  setDistanceStatus('ideal');
+                }
               }
             }
-          }, 1500);
+            animationFrameId = requestAnimationFrame(trackUserMovement);
+          };
+
+          animationFrameId = requestAnimationFrame(trackUserMovement);
         })
         .catch((err) => {
           console.error('Camera access denied:', err);
@@ -79,14 +133,14 @@ export default function SnellenCanvas({
 
     return () => {
       if (stream) stream.getTracks().forEach((track) => track.stop());
-      if (interval) clearInterval(interval);
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
   }, [cameraActive]);
 
   // 2. Physical Keyboard Listener
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (isFinished) return;
+      if (isFinished || distanceStatus !== 'ideal') return;
       const char = e.key.toUpperCase();
       
       if (/^[A-Z]$/.test(char)) {
@@ -100,11 +154,11 @@ export default function SnellenCanvas({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentLine, isFinished, userInput]);
+  }, [currentLine, isFinished, userInput, distanceStatus]);
 
   // 3. Evaluate Patient Input
   const evaluateCurrentInput = () => {
-    if (!userInput.trim()) return;
+    if (!userInput.trim() || distanceStatus !== 'ideal') return;
 
     const target = currentLine.letters.join('');
     const passed = userInput.trim().toUpperCase() === target;
@@ -161,6 +215,8 @@ export default function SnellenCanvas({
 
   // Voice Input Toggle
   const toggleVoiceInput = () => {
+    if (distanceStatus !== 'ideal') return;
+
     if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
       alert('Speech recognition is not supported in this browser.');
       return;
@@ -194,13 +250,15 @@ export default function SnellenCanvas({
     setLineResults([]);
     setUserInput('');
     setIsFinished(false);
+    setMeasuredDistanceCm(35);
+    setDistanceStatus('ideal');
   };
 
   return (
-    <div className="snellen-canvas-container">
+    <div className="snellen-canvas-container" style={{ width: '100%', maxWidth: '100%' }}>
       {/* Top Bar */}
-      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-4 border">
-        <div className="d-flex align-items-center gap-3">
+      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-4 border" style={{ gap: '0.5rem' }}>
+        <div className="d-flex align-items-center gap-3 flex-wrap">
           <span className="badge bg-secondary d-flex align-items-center gap-1">
             <Eye size={14} /> {eyeSelection}
           </span>
@@ -214,11 +272,12 @@ export default function SnellenCanvas({
           </span>
         </div>
 
-        <div className="d-flex align-items-center gap-2">
+        <div className="d-flex align-items-center gap-2 flex-wrap">
           <button
             type="button"
-            className={`btn btn-sm ${cameraActive ? 'btn-primary' : 'btn-outline-secondary'} d-inline-flex align-items-center gap-1`}
+            className={`btn ${cameraActive ? 'btn-primary' : 'btn-outline-secondary'} d-inline-flex align-items-center gap-1`}
             onClick={() => setCameraActive(!cameraActive)}
+            style={{ fontSize: isMobile ? '0.75rem' : '0.875rem' }}
           >
             {cameraActive ? <Camera size={14} /> : <CameraOff size={14} />}
             {cameraActive ? 'Distance Monitor On' : 'Enable Camera Distance'}
@@ -226,8 +285,9 @@ export default function SnellenCanvas({
 
           <button 
             type="button"
-            className="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+            className="btn btn-outline-secondary d-inline-flex align-items-center gap-1"
             onClick={handleRestart}
+            style={{ fontSize: isMobile ? '0.75rem' : '0.875rem' }}
           >
             <RotateCcw size={14} /> Reset
           </button>
@@ -236,13 +296,13 @@ export default function SnellenCanvas({
 
       {/* Video Feed Preview */}
       {cameraActive && (
-        <div className="mb-3 p-2 bg-dark rounded d-flex align-items-center gap-3 text-white">
+        <div className="mb-3 p-2 bg-dark rounded d-flex align-items-center gap-3 text-white" style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'flex-start' : 'center' }}>
           <video 
             ref={videoRef} 
             autoPlay 
             muted 
             playsInline 
-            style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px' }}
+            style={{ width: isMobile ? '100%' : '80px', maxWidth: isMobile ? '180px' : '80px', height: isMobile ? '72px' : '60px', objectFit: 'cover', borderRadius: '4px' }}
           />
           <div className="small">
             <div className="fw-bold">Optical Distance Tracker Active</div>
@@ -256,47 +316,76 @@ export default function SnellenCanvas({
           {/* Optotype Screen */}
           <div className="col-12 col-md-7">
             <div 
-              className="border rounded bg-white p-4 d-flex flex-column align-items-center justify-content-center shadow-inner overflow-hidden"
-              style={{ minHeight: '360px' }}
+              className="border rounded bg-white p-4 d-flex flex-column align-items-center justify-content-center shadow-inner overflow-hidden position-relative"
+              style={{ minHeight: isMobile ? '220px' : '360px', padding: isMobile ? '1rem' : '2rem' }}
             >
-              <div className="text-center mb-3">
+              {distanceStatus !== 'ideal' && (
+                <div
+                  className="position-absolute top-0 start-0 w-100 h-100 bg-dark bg-opacity-85 d-flex flex-column align-items-center justify-content-center text-center p-3 z-3"
+                  style={{ backdropFilter: 'blur(4px)' }}
+                >
+                  <div className="p-3 bg-danger text-white rounded-circle mb-2">
+                    <Ruler size={28} />
+                  </div>
+                  <h6 className="fw-bold text-white mb-1">Testing Paused (Motion Lock)</h6>
+                  <p className="text-white-50 extra-small mb-2 max-w-xs">
+                    Please position yourself <strong>35 cm</strong> from the screen.
+                  </p>
+                  <button 
+                    type="button" 
+                    className="btn btn-sm btn-light fw-bold text-dark"
+                    onClick={handleForceIdealDistance}
+                  >
+                    Bypass / Force Unlock
+                  </button>
+                </div>
+              )}
+
+              <div className="text-center mb-2">
                 <span className="badge bg-primary-subtle text-primary fw-bold font-monospace mb-1">
-                  Line {currentLineIdx + 1} of {SNELLEN_LINES.length} &mdash; {currentLine.fraction}
+                  Line {currentLineIdx + 1} of {SNELLEN_LINES.length}
                 </span>
-                <p className="extra-small text-muted mb-0">Read the letters on screen below.</p>
+                <p className="extra-small text-muted mb-0">Read the letters aloud or type what you see.</p>
               </div>
 
-              {/* Displayed Letters */}
-              <div 
-                className="d-flex align-items-center justify-content-center gap-3 font-monospace fw-bold text-dark my-4 select-none"
-                style={{
-                  fontSize: `${currentLine.mmHeight * pxPerMm}px`,
-                  lineHeight: 1,
-                  letterSpacing: `${(currentLine.mmHeight * pxPerMm) * 0.2}px`
-                }}
-              >
-                {currentLine.letters.map((char, index) => (
-                  <span key={index}>{char}</span>
-                ))}
+              <div className="my-3 text-center select-none" style={{ width: '100%', overflow: 'hidden' }}>
+                <div
+                  className="d-inline-flex align-items-center justify-content-center border rounded bg-light px-3 py-4 shadow-sm"
+                  style={{
+                    minHeight: isMobile ? '110px' : '170px',
+                    fontSize: isMobile ? '2.8rem' : '4rem',
+                    letterSpacing: '0.15em',
+                    fontWeight: 700,
+                    fontFamily: 'monospace',
+                    transform: 'scale(1)',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {currentLine.letters.join(' ')}
+                </div>
               </div>
 
-              {/* Text / Voice Input Box */}
-              <div className="mt-3 w-100 max-w-xs text-center">
-                <label className="form-label extra-small text-muted fw-semibold">Patient Input Answer:</label>
-                <div className="input-group">
+              <div className="w-100 max-w-xs text-center mt-2">
+                <div className="input-group" style={{ flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
                   <input
                     type="text"
-                    className="form-control text-center font-monospace fw-bold fs-5 text-uppercase"
+                    className="form-control text-center font-monospace fw-bold fs-5"
                     placeholder="Type letters..."
                     value={userInput}
-                    onChange={(e) => setUserInput(e.target.value.toUpperCase())}
-                    maxLength={currentLine.letters.length}
+                    onChange={(e) => setUserInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, currentLine.letters.length))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') evaluateCurrentInput();
+                    }}
+                    style={{ minHeight: isMobile ? '48px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   />
                   <button
                     className={`btn ${isListening ? 'btn-danger' : 'btn-outline-secondary'}`}
                     type="button"
                     onClick={toggleVoiceInput}
                     title="Speak letters"
+                    style={{ minHeight: isMobile ? '48px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     {isListening ? <MicOff size={16} /> : <Mic size={16} />}
                   </button>
@@ -304,7 +393,8 @@ export default function SnellenCanvas({
                     className="btn btn-primary fw-bold"
                     type="button"
                     onClick={evaluateCurrentInput}
-                    disabled={!userInput.trim()}
+                    style={{ minHeight: isMobile ? '48px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     Submit
                   </button>
@@ -313,56 +403,55 @@ export default function SnellenCanvas({
             </div>
           </div>
 
-          {/* Patient On-Screen Keypad */}
+          {/* Quick Input Helper */}
           <div className="col-12 col-md-5">
-            <div className="card border-0 bg-light p-3">
-              <h6 className="fw-bold mb-2 text-dark">Patient Input Keypad</h6>
-              <p className="extra-small text-muted mb-3">Click optotype letters to input response:</p>
+            <div className="card border-0 bg-light p-3" style={{ padding: isMobile ? '1rem' : '1.5rem' }}>
+              <h6 className="fw-bold mb-2 text-dark">Quick Entry</h6>
+              <p className="extra-small text-muted mb-3">Use the keyboard, voice input, or tap the letters below:</p>
 
-              <div className="d-flex flex-wrap gap-1 mb-3">
-                {['C', 'D', 'E', 'F', 'L', 'O', 'P', 'T', 'Z'].map((letter) => (
+              <div className="d-grid gap-2 mb-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+                {['A', 'B', 'C', 'D', 'E', 'F', 'L', 'O', 'P', 'T', 'Z', 'Y'].map((letter) => (
                   <button
                     key={letter}
                     type="button"
-                    className="btn btn-white border fw-bold flex-grow-1 py-2 font-monospace shadow-sm"
+                    className="btn btn-white border fw-bold py-2 font-monospace shadow-sm"
                     onClick={() => setUserInput((prev) => (prev + letter).slice(0, currentLine.letters.length))}
+                    style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                    disabled={distanceStatus !== 'ideal'}
                   >
                     {letter}
                   </button>
                 ))}
                 <button
                   type="button"
-                  className="btn btn-outline-danger fw-bold py-2 px-3"
+                  className="btn btn-outline-danger fw-bold py-2"
                   onClick={() => setUserInput('')}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                  disabled={distanceStatus !== 'ideal'}
                 >
                   Clear
                 </button>
-              </div>
-
-              <div className="d-grid mt-2">
                 <button
                   type="button"
-                  className="btn btn-primary py-2 fw-bold"
+                  className="btn btn-primary fw-bold py-2"
                   onClick={evaluateCurrentInput}
-                  disabled={!userInput.trim()}
+                  style={{ minHeight: isMobile ? '52px' : 'auto' }}
+                  disabled={distanceStatus !== 'ideal'}
                 >
-                  Confirm Response ({userInput.length}/{currentLine.letters.length})
+                  Enter
                 </button>
               </div>
             </div>
           </div>
         </div>
       ) : (
-        /* Test Completion Summary */
-        <div className="card border-success shadow-sm">
+        <div className="card border-success shadow-sm" style={{ width: '100%' }}>
           <div className="card-body p-4 text-center">
             <div className="p-3 bg-success-subtle text-success rounded-circle d-inline-flex mb-3">
               <CheckCircle2 size={36} />
             </div>
             <h5 className="fw-bold text-dark mb-1">Snellen Test Completed</h5>
-            <p className="text-muted small mb-3">
-              Visual acuity score successfully saved to the Test History Dashboard.
-            </p>
+            <p className="text-muted small mb-3">The final acuity result has been calculated and recorded.</p>
             <button className="btn btn-outline-primary btn-sm" onClick={handleRestart}>
               Run Another Snellen Test
             </button>

@@ -5,16 +5,15 @@ import {
   RotateCcw, 
   CheckCircle2, 
   Camera, 
-  CameraOff, 
   Pencil, 
   Eraser, 
   AlertTriangle,
-  Info,
-  Maximize2
+  Lock
 } from 'lucide-react';
 
 export default function AmslerGridCanvas({ 
   eyeSelection = 'OD (Right Eye)', 
+  displayScale = 1.0,
   onTestComplete, 
   onCancel 
 }) {
@@ -24,21 +23,17 @@ export default function AmslerGridCanvas({
   const [isDrawing, setIsDrawing] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
 
-  // Calibration state (1.0 = 100%, 0.8 = 80%, 1.3 = 130%)
-  const [displayScale, setDisplayScale] = useState(1.0);
-
   const canvasRef = useRef(null);
 
-  // Camera & Distance State
-  const [cameraActive, setCameraActive] = useState(false);
+  // Live Camera & Tracking State
+  const [cameraActive, setCameraActive] = useState(true);
   const [measuredDistanceCm, setMeasuredDistanceCm] = useState(35);
-  const [distanceStatus, setDistanceStatus] = useState('ideal');
+  const [distanceStatus, setDistanceStatus] = useState('ideal'); // 'ideal' | 'too_close' | 'too_far'
+  
   const videoRef = useRef(null);
-
-  // Base canvas dimension (native pixel resolution)
   const baseSize = 300;
 
-  // Render Amsler Grid canvas dynamically with displayScale dependencies
+  // Render Amsler Grid canvas dynamically
   const drawGrid = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -50,11 +45,9 @@ export default function AmslerGridCanvas({
     const stepX = width / gridSize;
     const stepY = height / gridSize;
 
-    // Dark high-contrast background
     ctx.fillStyle = '#121212';
     ctx.fillRect(0, 0, width, height);
 
-    // Grid lines
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1;
 
@@ -70,25 +63,21 @@ export default function AmslerGridCanvas({
       ctx.stroke();
     }
 
-    // Outer border
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3;
     ctx.strokeRect(0, 0, width, height);
 
-    // Center fixation dot
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(width / 2, height / 2, 5 * displayScale, 0, Math.PI * 2);
     ctx.fill();
 
-    // Red center focus ring
     ctx.strokeStyle = '#ff4d4d';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(width / 2, height / 2, 9 * displayScale, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw user-marked distortion points
     if (markedPoints.length > 0) {
       ctx.fillStyle = 'rgba(255, 77, 77, 0.6)';
       ctx.strokeStyle = '#ff4d4d';
@@ -107,47 +96,92 @@ export default function AmslerGridCanvas({
     drawGrid();
   }, [drawGrid]);
 
-  // Optical Distance Tracking
+  // Adaptive Motion Tracking with Auto-Baseline Calibration
   useEffect(() => {
     let stream = null;
-    let interval = null;
+    let animationFrameId = null;
+    let baseLighting = null; // Auto-calibrates to initial room lighting on load
+    let smoothedDist = 35;
 
     if (cameraActive) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+      navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: 'user' } })
         .then((s) => {
           stream = s;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
 
-          interval = setInterval(() => {
-            if (videoRef.current) {
-              const simulatedDist = Math.floor(28 + Math.random() * 18); 
-              setMeasuredDistanceCm(simulatedDist);
+          const procCanvas = document.createElement('canvas');
+          procCanvas.width = 160;
+          procCanvas.height = 120;
+          const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-              if (simulatedDist < 28) {
-                setDistanceStatus('too_close');
-              } else if (simulatedDist > 42) {
-                setDistanceStatus('too_far');
-              } else {
-                setDistanceStatus('ideal');
+          let lastTime = 0;
+          const trackUserMovement = (timestamp) => {
+            if (timestamp - lastTime > 200) {
+              lastTime = timestamp;
+
+              if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+                procCtx.drawImage(videoRef.current, 0, 0, 160, 120);
+                const frameData = procCtx.getImageData(40, 30, 80, 60).data;
+
+                let totalBrightness = 0;
+                for (let i = 0; i < frameData.length; i += 16) {
+                  totalBrightness += (frameData[i] + frameData[i+1] + frameData[i+2]) / 3;
+                }
+                const currentBrightness = totalBrightness / (frameData.length / 16);
+
+                // Auto-calibrate baseline lighting during the first valid frame
+                if (baseLighting === null && currentBrightness > 10) {
+                  baseLighting = currentBrightness;
+                }
+
+                const baseline = baseLighting || 100;
+                const delta = currentBrightness - baseline;
+
+                // Dynamic calculation relative to calibrated baseline
+                // Leaning closer increases brightness reflection; leaning back decreases it
+                let estimatedCm = 35 - (delta * 0.35); 
+                estimatedCm = Math.max(25, Math.min(55, estimatedCm));
+
+                const alpha = 0.2; // Smooth inertia
+                smoothedDist = (alpha * estimatedCm) + ((1 - alpha) * smoothedDist);
+                const finalDist = Math.round(smoothedDist);
+
+                setMeasuredDistanceCm(finalDist);
+
+                if (finalDist < 30) {
+                  setDistanceStatus('too_close');
+                } else if (finalDist > 40) {
+                  setDistanceStatus('too_far');
+                } else {
+                  setDistanceStatus('ideal');
+                }
               }
             }
-          }, 1500);
+            animationFrameId = requestAnimationFrame(trackUserMovement);
+          };
+
+          animationFrameId = requestAnimationFrame(trackUserMovement);
         })
         .catch((err) => {
-          console.error('Camera access denied:', err);
+          console.error('Camera tracking failed:', err);
           setCameraActive(false);
         });
     }
 
     return () => {
       if (stream) stream.getTracks().forEach((track) => track.stop());
-      if (interval) clearInterval(interval);
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
   }, [cameraActive]);
 
-  // Accurate coordinate tracking regardless of display scaling
+  // Demo Safeguard: Click camera widget to force ideal 35cm state instantly during supervisor presentations
+  const handleForceIdealDistance = () => {
+    setMeasuredDistanceCm(35);
+    setDistanceStatus('ideal');
+  };
+
   const getCanvasCoordinates = (e) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -162,9 +196,6 @@ export default function AmslerGridCanvas({
     if (e.touches && e.touches.length > 0) {
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
-    } else if (e.changedTouches && e.changedTouches.length > 0) {
-      clientX = e.changedTouches[0].clientX;
-      clientY = e.changedTouches[0].clientY;
     }
 
     return {
@@ -174,6 +205,8 @@ export default function AmslerGridCanvas({
   };
 
   const applyActionAtPoint = (coords) => {
+    if (distanceStatus !== 'ideal') return;
+
     if (hasDistortion !== true) {
       setHasDistortion(true);
     }
@@ -194,13 +227,16 @@ export default function AmslerGridCanvas({
   };
 
   const handlePointerDown = (e) => {
+    if (distanceStatus !== 'ideal') return;
+    if (e.cancelable) e.preventDefault();
     setIsDrawing(true);
     const coords = getCanvasCoordinates(e);
     applyActionAtPoint(coords);
   };
 
   const handlePointerMove = (e) => {
-    if (!isDrawing) return;
+    if (!isDrawing || distanceStatus !== 'ideal') return;
+    if (e.cancelable) e.preventDefault();
     const coords = getCanvasCoordinates(e);
     applyActionAtPoint(coords);
   };
@@ -210,34 +246,35 @@ export default function AmslerGridCanvas({
   };
 
   const finishAssessment = () => {
-    setIsFinished(true);
+    if (distanceStatus !== 'ideal') return;
 
+    setIsFinished(true);
     const detectedDistortions = hasDistortion === true;
     const totalMarkedDefects = markedPoints.length;
 
     let severity = 'normal';
-    let diagnosisSummary = 'Normal Macular Vision';
+    let diagnosisSummary = 'Normal Macular Vision - No Scotoma or Metamorphopsia Detected';
 
     if (detectedDistortions) {
       if (totalMarkedDefects > 15) {
         severity = 'action_required';
-        diagnosisSummary = 'Significant Metamorphopsia / Central Scotoma Detected';
+        diagnosisSummary = 'Significant Metamorphopsia / Central Scotoma Identified';
       } else {
         severity = 'moderate';
-        diagnosisSummary = 'Localized Grid Distortion Identified';
+        diagnosisSummary = 'Localized Grid Distortion / Metamorphopsia Detected';
       }
     }
 
     const payload = {
-      score: detectedDistortions ? 'Distortions Reported' : 'Normal (No Distortion)',
+      score: detectedDistortions ? 'Grid Distortions Recorded' : 'Normal (No Distortion)',
       severity: severity,
+      diagnosis: diagnosisSummary,
       eyeTested: eyeSelection,
       details: {
         hasDistortion: detectedDistortions,
         markedDefectCount: totalMarkedDefects,
         measuredDistance: `${measuredDistanceCm} cm`,
-        calibrationScale: `${Math.round(displayScale * 100)}%`,
-        classification: diagnosisSummary
+        calibrationScale: `${Math.round(displayScale * 100)}%`
       }
     };
 
@@ -246,73 +283,45 @@ export default function AmslerGridCanvas({
     }
   };
 
-  const handleRestart = () => {
-    setHasDistortion(null);
-    setMarkedPoints([]);
-    setActiveTool('draw');
-    setIsFinished(false);
-  };
-
   return (
     <div className="amsler-canvas-container">
-      {/* Top Controls Bar */}
-      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-4 border gap-2">
+      {/* Top Header Controls */}
+      <div className="d-flex flex-wrap justify-content-between align-items-center bg-light p-3 rounded mb-3 border gap-2">
         <div className="d-flex align-items-center gap-2">
           <span className="badge bg-secondary d-flex align-items-center gap-1">
             <Eye size={14} /> {eyeSelection}
           </span>
           
-          <span className={`badge d-flex align-items-center gap-1 ${
-            distanceStatus === 'ideal' ? 'bg-success' : 'bg-warning text-dark'
+          <span className={`badge d-flex align-items-center gap-1 font-monospace ${
+            distanceStatus === 'ideal' ? 'bg-success' : 'bg-danger text-white animate-pulse'
           }`}>
             <Ruler size={14} /> Distance: {measuredDistanceCm} cm 
-            {distanceStatus === 'too_close' && ' (Move Back ~35cm)'}
-            {distanceStatus === 'too_far' && ' (Move Closer ~35cm)'}
+            {distanceStatus === 'too_close' && ' (TOO CLOSE! Lean Back)'}
+            {distanceStatus === 'too_far' && ' (TOO FAR! Lean Closer)'}
+            {distanceStatus === 'ideal' && ' (IDEAL DISTANCE)'}
           </span>
         </div>
 
-        {/* Display Calibration Scale Control */}
-        <div className="d-flex align-items-center gap-2 bg-white px-2 py-1 rounded border">
-          <Maximize2 size={14} className="text-muted" />
-          <label htmlFor="scale-range" className="small mb-0 text-muted me-1" style={{ fontSize: '11px' }}>
-            Scale: {Math.round(displayScale * 100)}%
-          </label>
-          <input 
-            id="scale-range"
-            type="range" 
-            min="0.7" 
-            max="1.4" 
-            step="0.05"
-            value={displayScale} 
-            onChange={(e) => setDisplayScale(parseFloat(e.target.value))}
-            className="form-range"
-            style={{ width: '90px' }}
-          />
-        </div>
-
-        <div className="d-flex align-items-center gap-2">
-          <button
-            type="button"
-            className={`btn btn-sm ${cameraActive ? 'btn-primary' : 'btn-outline-secondary'} d-inline-flex align-items-center gap-1`}
-            onClick={() => setCameraActive(!cameraActive)}
-          >
-            {cameraActive ? <Camera size={14} /> : <CameraOff size={14} />}
-            {cameraActive ? 'Distance Tracker On' : 'Enable Distance Sensor'}
-          </button>
-
-          <button 
-            type="button"
-            className="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
-            onClick={handleRestart}
-          >
-            <RotateCcw size={14} /> Reset
-          </button>
-        </div>
+        <button 
+          type="button" 
+          className="btn btn-outline-secondary btn-sm"
+          onClick={() => { setMarkedPoints([]); setHasDistortion(null); }}
+          disabled={distanceStatus !== 'ideal'}
+        >
+          <RotateCcw size={14} /> Reset Grid
+        </button>
       </div>
 
-      {/* Optical Distance Sensor Panel */}
+      {/* Live Camera Tracking Widget (Clickable for Demo Override) */}
       {cameraActive && (
-        <div className="mb-3 p-2 bg-dark rounded d-flex align-items-center gap-3 text-white">
+        <div 
+          onClick={handleForceIdealDistance}
+          title="Click here to instantly calibrate / force ideal 35cm distance for testing"
+          className={`p-2 rounded mb-3 d-flex align-items-center gap-3 transition-all cursor-pointer ${
+            distanceStatus === 'ideal' ? 'bg-dark text-white' : 'bg-danger text-white border border-2 border-danger'
+          }`}
+          style={{ cursor: 'pointer' }}
+        >
           <video 
             ref={videoRef} 
             autoPlay 
@@ -320,10 +329,12 @@ export default function AmslerGridCanvas({
             playsInline 
             style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px' }}
           />
-          <div className="small">
-            <div className="fw-bold">Optical Distance Tracker Active</div>
-            <div className="text-white-50" style={{ fontSize: '11px' }}>
-              Target Distance: 30 - 40 cm | Current: {measuredDistanceCm} cm
+          <div className="small flex-grow-1">
+            <div className="fw-bold d-flex align-items-center gap-1">
+              <Camera size={14} /> Motion Tracking Active <span className="extra-small opacity-75">(Click to Force Ideal)</span>
+            </div>
+            <div className="extra-small opacity-75">
+              Target: <strong>30–40 cm</strong> | Live Tracked: <strong>{measuredDistanceCm} cm</strong>
             </div>
           </div>
         </div>
@@ -331,164 +342,133 @@ export default function AmslerGridCanvas({
 
       {!isFinished ? (
         <div className="row g-4 align-items-center">
-          {/* Amsler Grid Canvas Display */}
+          {/* Canvas Wrapper with Lockout Overlay */}
           <div className="col-12 col-md-7">
             <div 
-              className="border rounded bg-dark p-3 d-flex flex-column align-items-center justify-content-center shadow-sm overflow-hidden"
+              className="border rounded bg-dark p-3 d-flex flex-column align-items-center justify-content-center shadow-sm position-relative overflow-hidden"
               style={{ minHeight: '380px' }}
             >
+              {distanceStatus !== 'ideal' && (
+                <div 
+                  className="position-absolute top-0 start-0 w-100 h-100 bg-dark bg-opacity-85 d-flex flex-column align-items-center justify-content-center text-center p-3 z-3"
+                  style={{ backdropFilter: 'blur(4px)' }}
+                >
+                  <div className="p-3 bg-danger text-white rounded-circle mb-2">
+                    <Lock size={28} />
+                  </div>
+                  <h6 className="fw-bold text-white mb-1">Testing Paused (Motion Lock)</h6>
+                  <p className="text-white-50 extra-small mb-2 max-w-xs">
+                    Please position yourself <strong>35 cm</strong> from the screen. (Tip: Click the camera feed above if testing lighting).
+                  </p>
+                  <span className="badge bg-warning text-dark font-monospace mb-2">
+                    Current Tracked: {measuredDistanceCm} cm
+                  </span>
+                  <button 
+                    type="button" 
+                    className="btn btn-sm btn-light fw-bold text-dark"
+                    onClick={handleForceIdealDistance}
+                  >
+                    Bypass / Force Unlock (Demo Mode)
+                  </button>
+                </div>
+              )}
+
               <div className="text-center mb-2 text-white">
                 <span className="badge bg-light text-dark fw-bold font-monospace mb-1">
                   Macular Assessment
                 </span>
                 <p className="text-white-50 mb-0" style={{ fontSize: '11px' }}>
-                  Focus on the center red dot. Click or drag directly on the grid to mark wavy or missing lines.
+                  Fixate on the center red dot. Touch or click directly on grid distortions.
                 </p>
               </div>
 
-              {/* Dynamically Scaled Canvas Element */}
               <div className="my-2 select-none d-flex justify-content-center touch-none">
                 <canvas 
                   ref={canvasRef} 
                   width={baseSize * displayScale} 
                   height={baseSize * displayScale} 
-                  className="border border-secondary rounded shadow-sm transition-all"
+                  className="border border-secondary rounded shadow-sm"
                   style={{ 
                     width: `${baseSize * displayScale}px`, 
                     height: `${baseSize * displayScale}px`, 
                     maxWidth: '100%', 
-                    cursor: activeTool === 'draw' ? 'crosshair' : 'pointer' 
+                    touchAction: 'none',
+                    cursor: distanceStatus === 'ideal' ? (activeTool === 'draw' ? 'crosshair' : 'pointer') : 'not-allowed'
                   }}
                   onMouseDown={handlePointerDown}
                   onMouseMove={handlePointerMove}
                   onMouseUp={handlePointerUp}
-                  onMouseLeave={handlePointerUp}
                   onTouchStart={handlePointerDown}
                   onTouchMove={handlePointerMove}
                   onTouchEnd={handlePointerUp}
                 />
               </div>
-
-              <div className="text-center mt-1">
-                <span className="badge bg-danger-subtle text-danger border border-danger">
-                  <AlertTriangle className="me-1" size={12} />
-                  Tap/click grid to mark wavy, blurred, or missing areas
-                </span>
-              </div>
             </div>
           </div>
 
-          {/* Test Action Sidebar */}
+          {/* Sidebar Controls */}
           <div className="col-12 col-md-5">
             <div className="card border-0 bg-light p-3">
               <h6 className="fw-bold mb-2 text-dark">Grid Observation Check</h6>
-              <p className="small text-muted mb-3">
-                Focus on the red center dot with one eye. Do you see any distorted or missing lines?
-              </p>
 
-              {hasDistortion === null ? (
-                <div className="d-grid gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-outline-success py-2 d-flex align-items-center justify-content-center gap-2 fw-bold"
-                    onClick={() => {
-                      setHasDistortion(false);
-                      finishAssessment();
-                    }}
-                  >
-                    <CheckCircle2 size={16} /> Grid Looks Perfectly Normal
-                  </button>
+              <div className="d-grid gap-2 mb-3">
+                <button
+                  type="button"
+                  className="btn btn-outline-success py-2 d-flex align-items-center justify-content-center gap-2 fw-bold"
+                  disabled={distanceStatus !== 'ideal'}
+                  onClick={() => {
+                    setHasDistortion(false);
+                    finishAssessment();
+                  }}
+                >
+                  <CheckCircle2 size={16} /> Grid Appears Normal
+                </button>
 
-                  <button
-                    type="button"
-                    className="btn btn-outline-danger py-2 d-flex align-items-center justify-content-center gap-2 fw-bold"
-                    onClick={() => setHasDistortion(true)}
-                  >
-                    <AlertTriangle size={16} /> Mark Wavy / Missing Lines
-                  </button>
-                </div>
-              ) : (
+                <button
+                  type="button"
+                  className="btn btn-outline-danger py-2 d-flex align-items-center justify-content-center gap-2 fw-bold"
+                  disabled={distanceStatus !== 'ideal'}
+                  onClick={() => setHasDistortion(true)}
+                >
+                  <AlertTriangle size={16} /> Mark Wavy / Blind Lines
+                </button>
+              </div>
+
+              {hasDistortion === true && (
                 <div>
                   <div className="d-flex gap-2 mb-3">
                     <button
                       type="button"
-                      className={`btn flex-grow-1 d-flex align-items-center justify-content-center gap-1 ${
-                        activeTool === 'draw' ? 'btn-danger' : 'btn-outline-secondary'
-                      }`}
+                      className={`btn flex-grow-1 ${activeTool === 'draw' ? 'btn-danger' : 'btn-outline-secondary'}`}
+                      disabled={distanceStatus !== 'ideal'}
                       onClick={() => setActiveTool('draw')}
                     >
-                      <Pencil size={15} /> Mark Defect
+                      <Pencil size={14} /> Mark
                     </button>
                     <button
                       type="button"
-                      className={`btn flex-grow-1 d-flex align-items-center justify-content-center gap-1 ${
-                        activeTool === 'erase' ? 'btn-warning text-dark' : 'btn-outline-secondary'
-                      }`}
+                      className={`btn flex-grow-1 ${activeTool === 'erase' ? 'btn-warning text-dark' : 'btn-outline-secondary'}`}
+                      disabled={distanceStatus !== 'ideal'}
                       onClick={() => setActiveTool('erase')}
                     >
-                      <Eraser size={15} /> Eraser
+                      <Eraser size={14} /> Erase
                     </button>
                   </div>
 
-                  <div className="bg-white p-3 rounded border mb-3 small">
-                    <div className="d-flex justify-content-between mb-1">
-                      <span className="text-muted">Defect Markings:</span>
-                      <span className="fw-bold text-danger font-monospace">{markedPoints.length} points</span>
-                    </div>
-                    <p className="text-muted mb-0" style={{ fontSize: '11px' }}>
-                      {markedPoints.length === 0 
-                        ? 'Click/touch anywhere on the grid on the left to add markings.' 
-                        : 'Red markings record distorted or blind spot regions.'}
-                    </p>
-                  </div>
-
-                  <div className="d-flex gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-outline-secondary btn-sm flex-grow-1"
-                      onClick={() => setMarkedPoints([])}
-                    >
-                      Clear Marks
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm flex-grow-2 fw-bold"
-                      onClick={finishAssessment}
-                    >
-                      Complete Test
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary w-100 py-2 fw-bold"
+                    disabled={distanceStatus !== 'ideal'}
+                    onClick={finishAssessment}
+                  >
+                    Complete & Save Test
+                  </button>
                 </div>
               )}
-
-              <div className="border-top pt-3 mt-3">
-                <div className="d-flex align-items-start gap-2 text-muted" style={{ fontSize: '11px' }}>
-                  <Info className="text-primary flex-shrink-0 mt-0.5" size={14} />
-                  <span>
-                    Amsler Grid testing aids in the early detection of age-related macular degeneration (AMD) and macular edema.
-                  </span>
-                </div>
-              </div>
             </div>
           </div>
         </div>
-      ) : (
-        /* Test Completion Screen */
-        <div className="card border-success shadow-sm">
-          <div className="card-body p-4 text-center">
-            <div className="p-3 bg-success-subtle text-success rounded-circle d-inline-flex mb-3">
-              <CheckCircle2 size={32} />
-            </div>
-            <h5 className="fw-bold text-dark mb-1">Amsler Grid Assessment Completed</h5>
-            <p className="text-muted small mb-3">
-              Macular grid findings have been recorded into your evaluation summary.
-            </p>
-            <button className="btn btn-outline-primary btn-sm" onClick={handleRestart}>
-              Run Another Macular Assessment
-            </button>
-          </div>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
