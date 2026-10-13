@@ -118,7 +118,9 @@ const ISHIHARA_PLATES = [
 export default function IshiharaCanvas({ 
   eyeSelection = 'OU (Both Eyes)', 
   onTestComplete, 
-  onCancel 
+  onCancel,
+  onDistanceChange,
+  onAssistantMessage
 }) {
   const [currentPlateIdx, setCurrentPlateIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState([]);
@@ -245,13 +247,17 @@ export default function IshiharaCanvas({
             if (videoRef.current) {
               const simulatedDist = Math.floor(40 + Math.random() * 25); 
               setMeasuredDistanceCm(simulatedDist);
+              onDistanceChange && onDistanceChange(simulatedDist);
 
               if (simulatedDist < 40) {
                 setDistanceStatus('too_close');
+                onAssistantMessage && onAssistantMessage('Please move back. You are too close to the screen.');
               } else if (simulatedDist > 65) {
                 setDistanceStatus('too_far');
+                onAssistantMessage && onAssistantMessage('Please move closer. You are too far from the screen.');
               } else {
                 setDistanceStatus('ideal');
+                onAssistantMessage && onAssistantMessage('You are at the ideal distance.')
               }
             }
           }, 1500);
@@ -266,7 +272,7 @@ export default function IshiharaCanvas({
       if (stream) stream.getTracks().forEach((track) => track.stop());
       if (interval) clearInterval(interval);
     };
-  }, [cameraActive]);
+  }, [cameraActive, onDistanceChange, onAssistantMessage]);
 
   // Check for mobile viewport
   useEffect(() => {
@@ -412,6 +418,26 @@ export default function IshiharaCanvas({
     setDistanceStatus('ideal');
   };
 
+  useEffect(() => {
+    if (onDistanceChange) onDistanceChange(distanceStatus);
+  }, [distanceStatus, onDistanceChange]);
+
+  useEffect(() => {
+    if (!onAssistantMessage) return;
+
+    if (distanceStatus !== 'ideal') {
+      onAssistantMessage('📏 Please remain at the ideal distance for the Ishihara plate to be evaluated correctly.');
+      return;
+    }
+
+    if (isFinished) {
+      onAssistantMessage('✅ The color vision test is complete. Review the result and move to the next step.');
+      return;
+    }
+
+    onAssistantMessage(`🎯 Plate ${currentPlateIdx + 1}: What number do you see in this Ishihara pattern?`);
+  }, [currentPlateIdx, distanceStatus, isFinished, onAssistantMessage]);
+
   return (
     <div className="ishihara-canvas-container" style={{ width: '100%', maxWidth: '100%' }}>
       {/* Top Bar */}
@@ -464,7 +490,9 @@ export default function IshiharaCanvas({
           />
           <div className="small">
             <div className="fw-bold">Optical Distance Tracker Active</div>
-            <div className="text-white-50 extra-small">Target Distance: 50 cm | Current: {measuredDistanceCm} cm</div>
+            <div className="text-white-50 extra-small mb-2">
+              Target Distance: 50 cm | Current: {measuredDistanceCm} cm
+            </div>
           </div>
         </div>
       )}

@@ -110,4 +110,21 @@ code {
   background: var(--code-bg);
 }
 
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
 
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(25, 135, 84, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
+}
+
+.animate-bounce {
+  animation: bounce 2.5s infinite ease-in-out;
+}
+
+.animate-pulse {
+  animation: pulse 2s infinite;
+}

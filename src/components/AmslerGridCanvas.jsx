@@ -15,7 +15,9 @@ export default function AmslerGridCanvas({
   eyeSelection = 'OD (Right Eye)', 
   displayScale = 1.0,
   onTestComplete, 
-  onCancel 
+  onCancel,
+  onDistanceChange,
+  onAssistantMessage
 }) {
   const [hasDistortion, setHasDistortion] = useState(null);
   const [activeTool, setActiveTool] = useState('draw');
@@ -32,6 +34,31 @@ export default function AmslerGridCanvas({
   
   const videoRef = useRef(null);
   const baseSize = 300;
+
+  useEffect(() => {
+    if (onDistanceChange) onDistanceChange(distanceStatus);
+  }, [distanceStatus, onDistanceChange]);
+
+  useEffect(() => {
+    if (!onAssistantMessage) return;
+
+    if (distanceStatus !== 'ideal') {
+      onAssistantMessage('📏 Please stay at the ideal distance to keep the Amsler grid centered and readable.');
+      return;
+    }
+
+    if (isFinished) {
+      onAssistantMessage('✅ Amsler grid assessment complete. The grid result has been recorded.');
+      return;
+    }
+
+    if (hasDistortion === true) {
+      onAssistantMessage('🧭 The grid shows distortion. Mark the wavy or missing areas on the pattern, then save the result.');
+      return;
+    }
+
+    onAssistantMessage('👁️ Fixate on the central red dot and tell me whether the lines appear straight, wavy, or missing.');
+  }, [distanceStatus, hasDistortion, isFinished, onAssistantMessage]);
 
   // Render Amsler Grid canvas dynamically
   const drawGrid = useCallback(() => {

@@ -19,7 +19,9 @@ export default function TumblingECanvas({
   eyeSelection = 'OD (Right Eye)', 
   displayScale = 1.0,
   onTestComplete, 
-  onCancel 
+  onCancel,
+  onDistanceChange,
+  onAssistantMessage
 }) {
   // Standard 8-Line Clinical Visual Acuity Sequence (4 optotype trials per acuity level)
   const clinicalTestLines = [
@@ -62,6 +64,26 @@ export default function TumblingECanvas({
 
   const activeLine = clinicalTestLines[currentLineIndex];
   const currentRotation = activeLine ? activeLine.letters[currentLetterIndex] : 'up';
+
+  useEffect(() => {
+    if (onDistanceChange) onDistanceChange(distanceStatus);
+  }, [distanceStatus, onDistanceChange]);
+
+  useEffect(() => {
+    if (!onAssistantMessage) return;
+
+    if (distanceStatus !== 'ideal') {
+      onAssistantMessage('📏 Please position yourself at 35 cm so the Tumbling E chart is readable and accurate.');
+      return;
+    }
+
+    if (testResultSummary) {
+      onAssistantMessage(`✅ Test complete. Final acuity: ${testResultSummary.score}.`);
+      return;
+    }
+
+    onAssistantMessage(`👀 Identify the opening direction of the E on line ${activeLine.line} (${activeLine.acuity}). Use the arrow keys or the buttons below.`);
+  }, [activeLine, distanceStatus, onAssistantMessage, testResultSummary]);
 
   // Real-Time Camera Motion Tracking & Ambient Light Calibration
   useEffect(() => {
@@ -121,6 +143,11 @@ export default function TumblingECanvas({
                 } else {
                   setDistanceStatus('ideal');
                 }
+
+                // Notify distance change to assistant
+                if (onDistanceChange) {
+                  onDistanceChange(finalDist, distanceStatus);
+                }
               }
             }
             animationFrameId = requestAnimationFrame(trackUserMovement);
@@ -138,7 +165,7 @@ export default function TumblingECanvas({
       if (stream) stream.getTracks().forEach((track) => track.stop());
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
-  }, [cameraActive]);
+  }, [cameraActive, onDistanceChange]);
 
   const handleForceIdealDistance = (e) => {
     if (e) e.stopPropagation();

@@ -25,7 +25,9 @@ export default function SnellenCanvas({
   pxPerMm = 3.78, 
   eyeSelection = 'OU (Both Eyes)', 
   onTestComplete, 
-  onCancel 
+  onCancel,
+  onDistanceChange,
+  onAssistantMessage
 }) {
   const [currentLineIdx, setCurrentLineIdx] = useState(0);
   const [lineResults, setLineResults] = useState([]);
@@ -43,6 +45,10 @@ export default function SnellenCanvas({
   const [isListening, setIsListening] = useState(false);
 
   const currentLine = SNELLEN_LINES[currentLineIdx];
+  const optotypeFontSize = Math.max(
+    22,
+    Math.min(isMobile ? 110 : 170, currentLine.mmHeight * pxPerMm * 0.7)
+  );
 
   const handleForceIdealDistance = (e) => {
     if (e) e.stopPropagation();
@@ -254,6 +260,27 @@ export default function SnellenCanvas({
     setDistanceStatus('ideal');
   };
 
+  // Update parent distance status
+  useEffect(() => {
+    if (onDistanceChange) onDistanceChange(distanceStatus);
+  }, [distanceStatus, onDistanceChange]);
+
+  useEffect(() => {
+    if (!onAssistantMessage) return;
+
+    if (distanceStatus !== 'ideal') {
+      onAssistantMessage('📏 Please stay at the ideal distance of 35 cm so the chart can be read accurately.');
+      return;
+    }
+
+    if (isFinished) {
+      onAssistantMessage('✅ The Snellen assessment is complete. Review the results and continue to the next step.');
+      return;
+    }
+
+    onAssistantMessage(`👀 Read the ${currentLine.fraction} line (${currentLine.letters.join(' ')}) aloud or type what you see in ${eyeSelection}.`);
+  }, [currentLine, distanceStatus, eyeSelection, isFinished, onAssistantMessage]);
+
   return (
     <div className="snellen-canvas-container" style={{ width: '100%', maxWidth: '100%' }}>
       {/* Top Bar */}
@@ -353,7 +380,7 @@ export default function SnellenCanvas({
                   className="d-inline-flex align-items-center justify-content-center border rounded bg-light px-3 py-4 shadow-sm"
                   style={{
                     minHeight: isMobile ? '110px' : '170px',
-                    fontSize: isMobile ? '2.8rem' : '4rem',
+                    fontSize: `${optotypeFontSize}px`,
                     letterSpacing: '0.15em',
                     fontWeight: 700,
                     fontFamily: 'monospace',

@@ -20,10 +20,13 @@ import IshiharaCanvas from './components/IshiharaCanvas';
 import AmslerGridCanvas from './components/AmslerGridCanvas';
 import AdminDashboard from './components/AdminDashboard';
 import { supabase } from './supabaseClient';
+import VirtualAssistant from './components/VirtualAssistant';
 
 export default function App() {
   // Navigation State: 'home' | 'selection' | 'calibration' | 'test' | 'admin'
   const [currentView, setCurrentView] = useState('home');
+  const [distanceStatus, setDistanceStatus] = useState('ideal');
+  const [assistantMessage, setAssistantMessage] = useState('');
   
   // Test Configuration State
   const [selectedTest, setSelectedTest] = useState('snellen'); 
@@ -32,10 +35,17 @@ export default function App() {
   // Screen Physical Calibration State
   const [cardWidthPx, setCardWidthPx] = useState(280); 
   const [displayScale, setDisplayScale] = useState(1.0);
+  const [isMobile, setIsMobile] = useState(false);
 
   const [testResultsHistory, setTestResultsHistory] = useState([]);
   const [latestTestSummary, setLatestTestSummary] = useState(null);
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
+
+  const mobileCardWidth = cardWidthPx * 0.62;
+  const mobileCardHeight = mobileCardWidth * 1.58;
+  const maxScalePercent = 150;
+  const clampDisplayScale = (value) => Math.max(0.8, Math.min(value, 1.5));
+  const visibleScalePercent = Math.min(Math.round(displayScale * 100), maxScalePercent);
 
   // Fetch test history from Supabase on mount (with localStorage fallback)
   useEffect(() => {
@@ -78,6 +88,12 @@ export default function App() {
 
     fetchRecords();
   }, []);
+
+  useEffect(() => {
+    if (currentView !== 'test') {
+      setAssistantMessage('');
+    }
+  }, [currentView]);
 
   // Save result payload to Supabase Database
   const handleTestComplete = async (resultPayload) => {
@@ -172,6 +188,16 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  useEffect(() => {
+    const updateViewportMode = () => {
+      setIsMobile(window.matchMedia('(max-width: 767px)').matches);
+    };
+
+    updateViewportMode();
+    window.addEventListener('resize', updateViewportMode);
+    return () => window.removeEventListener('resize', updateViewportMode);
+  }, []);
+
   return (
     <div className="min-vh-100 bg-white d-flex flex-column">
       {/* Navbar */}
@@ -185,7 +211,7 @@ export default function App() {
             <div className="p-2 bg-primary text-white rounded shadow-xs">
               <Eye size={20} />
             </div>
-            <span>Visual Assessment <span className="text-primary">System</span></span>
+            <span>OPTICHECK <span className="text-primary">System</span></span>
           </a>
 
           <div className="d-flex align-items-center gap-2">
@@ -308,31 +334,84 @@ export default function App() {
 
                   <div className="d-flex justify-content-center my-4 p-4 bg-white rounded border overflow-hidden">
                     <div 
-                      className="border border-2 border-primary rounded bg-primary-subtle d-flex flex-column align-items-center justify-content-center shadow-sm transition-all"
-                      style={{ width: `${cardWidthPx}px`, height: `${cardWidthPx * 0.63}px`, minWidth: '180px' }}
+                      className="d-flex flex-column align-items-center justify-content-center shadow-sm transition-all position-relative"
+                      style={{
+                        width: isMobile ? `${mobileCardWidth}px` : `${cardWidthPx}px`,
+                        height: isMobile ? `${mobileCardHeight}px` : `${cardWidthPx * 0.63}px`,
+                        minWidth: isMobile ? '110px' : '180px',
+                        maxWidth: '100%',
+                        borderRadius: isMobile ? '18px' : '12px',
+                        border: '2px solid rgba(13, 110, 253, 0.7)',
+                        background: 'linear-gradient(135deg, #f8fbff 0%, #dfeaff 100%)',
+                        boxShadow: '0 18px 40px rgba(13,110,253,0.15)',
+                        padding: isMobile ? '10px' : '14px',
+                        transform: 'none'
+                      }}
                     >
-                      <CreditCard className="text-primary mb-1" size={28} />
-                      <span className="fw-bold text-dark extra-small">Align Physical Card Here</span>
-                      <span className="text-muted extra-small font-monospace">{Math.round(cardWidthPx)} px (~85.6 mm)</span>
+                      <div
+                        className="position-absolute top-0 start-0 w-100"
+                        style={{
+                          height: isMobile ? '24%' : '22%',
+                          background: 'linear-gradient(180deg, rgba(255,255,255,0.25), rgba(255,255,255,0.02))',
+                          borderTopLeftRadius: isMobile ? '18px' : '12px',
+                          borderTopRightRadius: isMobile ? '18px' : '12px'
+                        }}
+                      />
+
+                      <div className="position-absolute top-3 start-3 d-flex align-items-center gap-2">
+                        <div
+                          style={{
+                            width: isMobile ? '18px' : '22px',
+                            height: isMobile ? '14px' : '18px',
+                            borderRadius: '4px',
+                            background: 'linear-gradient(135deg, #d7dfe8, #aab7c7)',
+                            border: '1px solid rgba(102, 119, 136, 0.4)'
+                          }}
+                        />
+                        <div
+                          style={{
+                            height: isMobile ? '8px' : '10px',
+                            width: isMobile ? '40px' : '52px',
+                            borderRadius: '3px',
+                            background: 'rgba(108, 117, 125, 0.25)'
+                          }}
+                        />
+                      </div>
+
+                      <div
+                        className="position-absolute start-0 end-0"
+                        style={{
+                          top: isMobile ? '30%' : '28%',
+                          height: isMobile ? '10px' : '12px',
+                          background: 'linear-gradient(90deg, rgba(35,42,55,0.9), rgba(35,42,55,0.55), rgba(35,42,55,0.9))'
+                        }}
+                      />
+
+                      <div className="position-relative d-flex flex-column align-items-center justify-content-center text-center" style={{ zIndex: 2 }}>
+                        <CreditCard className="text-primary mb-1" size={isMobile ? 18 : 28} />
+                        <span className="fw-bold text-dark extra-small text-center">Align Physical Card Here</span>
+                        <span className="text-muted extra-small font-monospace text-center">{Math.round(cardWidthPx)} px (~85.6 mm)</span>
+                      </div>
                     </div>
                   </div>
 
                   <div className="mb-4 max-w-md mx-auto">
                     <label className="form-label small fw-bold text-dark d-flex justify-content-between">
-                      <span>Adjust Size Slider:</span>
-                      <span className="text-primary font-monospace">{Math.round(displayScale * 100)}% Scale</span>
+                      <span>{isMobile ? 'Adjust Card Height:' : 'Adjust Size Slider:'}</span>
+                      <span className="text-primary font-monospace">{visibleScalePercent}% Scale</span>
                     </label>
                     <input 
                       type="range" 
                       className="form-range" 
-                      min="180" 
-                      max="400" 
+                      min={isMobile ? 110 : 180} 
+                      max={isMobile ? 390 : 600} 
                       step="2"
                       value={cardWidthPx}
                       onChange={(e) => {
                         const newWidth = parseFloat(e.target.value);
+                        const nextScale = newWidth / (isMobile ? 240 : 400);
                         setCardWidthPx(newWidth);
-                        setDisplayScale(newWidth / 280);
+                        setDisplayScale(clampDisplayScale(nextScale));
                       }}
                     />
                   </div>
@@ -369,16 +448,42 @@ export default function App() {
             {!latestTestSummary ? (
               <>
                 {selectedTest === 'snellen' && (
-                  <SnellenCanvas eyeSelection={eyeSelection} displayScale={displayScale} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                  <SnellenCanvas 
+                    eyeSelection={eyeSelection} 
+                    displayScale={displayScale} 
+                    onTestComplete={handleTestComplete} 
+                    onCancel={() => setCurrentView('selection')} 
+                    onDistanceChange={(status) => setDistanceStatus(status)}
+                    onAssistantMessage={(msg) => setAssistantMessage(msg)}
+                  />
                 )}
                 {selectedTest === 'tumbling' && (
-                  <TumblingECanvas eyeSelection={eyeSelection} displayScale={displayScale} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                  <TumblingECanvas 
+                    eyeSelection={eyeSelection} 
+                    displayScale={displayScale} 
+                    onTestComplete={handleTestComplete} 
+                    onCancel={() => setCurrentView('selection')} 
+                    onDistanceChange={(status) => setDistanceStatus(status)}
+                    onAssistantMessage={(msg) => setAssistantMessage(msg)}
+                  />
                 )}
                 {selectedTest === 'ishihara' && (
-                  <IshiharaCanvas eyeSelection={eyeSelection} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                  <IshiharaCanvas 
+                    eyeSelection={eyeSelection} 
+                    onTestComplete={handleTestComplete} 
+                    onCancel={() => setCurrentView('selection')} 
+                    onDistanceChange={(status) => setDistanceStatus(status)}
+                    onAssistantMessage={(msg) => setAssistantMessage(msg)}
+                  />
                 )}
                 {selectedTest === 'amsler' && (
-                  <AmslerGridCanvas eyeSelection={eyeSelection} onTestComplete={handleTestComplete} onCancel={() => setCurrentView('selection')} />
+                  <AmslerGridCanvas 
+                    eyeSelection={eyeSelection} 
+                    onTestComplete={handleTestComplete} 
+                    onCancel={() => setCurrentView('selection')} 
+                    onDistanceChange={(status) => setDistanceStatus(status)}
+                    onAssistantMessage={(msg) => setAssistantMessage(msg)}
+                  />
                 )}
               </>
             ) : (
@@ -509,9 +614,16 @@ export default function App() {
 
       <footer className="bg-light border-top py-3 text-center text-muted small mt-auto">
         <div className="container">
-          Visual Assessment System &copy; 2026 | Cloud-Integrated Clinical Screening Suite
+          Visual Assessment System &copy; 2026 | MJI SOFT TECH
         </div>
       </footer>
+
+      <VirtualAssistant 
+        currentModule={currentView}
+        distanceStatus={distanceStatus}
+        eyeTested={eyeSelection}
+        assistantMessage={assistantMessage}
+      />
     </div>
   );
 }
